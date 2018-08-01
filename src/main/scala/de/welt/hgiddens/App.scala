@@ -59,9 +59,15 @@ object App extends StreamApp[IO] {
   // possible to write a simple wrapper type class (I like to call it Par)
   // that "forgets" the applicative effect (G, here) meaning it doesn't have
   // to be specified.
-  def combine[F[_]: Sync, G[_]](client: Client[F])(implicit ev: Parallel[F, G]): F[Unit] =
+  def showPostSummary[F[_]: Sync, G[_]](client: Client[F])(implicit ev: Parallel[F, G]): F[Unit] =
     for {
-      userAndPosts <- Parallel.parTuple2(user(client), posts(client))
+      userAndPosts <- (user(client), posts(client)).parTupled
+//      userAndPosts <- Parallel.parTuple2(user(client), posts(client))
+      // This can't be destructured in the previous binding because Scala
+      // thinks the pattern match is refutable for some dumb reason. There's
+      // actually a compiler plugin that alters the behaviour of for
+      // comprehensions to allow this, but introduces a variety of other
+      // "entertaining" problems.
       (user, posts) = userAndPosts
       message = combinedMessage(user, posts)
       _ <- Sync[F].delay(println(message))
@@ -78,6 +84,6 @@ object App extends StreamApp[IO] {
   def stream(args: List[String], requestShutdown: IO[Unit]): Stream[IO, ExitCode] =
     for {
       client <- Http1Client.stream[IO]()
-      _ <- Stream.eval(combine(client))
+      _ <- Stream.eval(showPostSummary(client))
     } yield ExitCode.Success
 }
