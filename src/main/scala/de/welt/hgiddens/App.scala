@@ -15,6 +15,19 @@ object App extends StreamApp[IO] {
   private val userResource = Uri.uri("https://jsonplaceholder.typicode.com/users/1")
   private val postsResource = Uri.uri("https://jsonplaceholder.typicode.com/posts?userId=1")
 
+  // Given the problem statement is to gather data from two endpoints
+  // asynchronously, the pervasive references to cats.effect.Sync may be
+  // surprising. The Sync typeclass is used to suspend synchronous effects
+  // (including failures); it's used by the JSON decoding stuff (Circe) to
+  // communicate failures in the type constructor F; failures parsing the JSON
+  // don't need to be communicated asynchronously.
+  //
+  // To demonstrate that the requests to the resources do actually happen
+  // asynchronously, I've added some simple logging around the HTTP calls. At
+  // least on my machine, this shows as expected that the execution of the
+  // client.expect call in user doesn't block the corresponding call in posts,
+  // despite happening on the same thread.
+
   def user[F[_]: Sync](client: Client[F]): F[User] =
     for {
       _ <- Sync[F].delay(log.info("Sending user request"))
@@ -30,6 +43,9 @@ object App extends StreamApp[IO] {
       _ <- Sync[F].delay(log.info("Retrieved posts"))
     } yield posts
 
+  // To combine the data fetched from the two resources, I've simply chosen to
+  // display a summary of the titles of the posts written by the user,
+  // including also the user's name and email 
   def combinedMessage(user: User, posts: Posts): String = {
     val header = s"Posts by ${user.name} <${user.email}>"
     val lines = posts.posts.map(post => s"* ${post.title}")
@@ -38,10 +54,11 @@ object App extends StreamApp[IO] {
 
   // The syntax for providing the parallel evidence is super ugly and
   // unfortunately (citation needed) we can't use existentials to hide the
-  // second (applicative) type constructor. For use-cases like this where we just want a
-  // very simple, parallel combination of two effects, it's possible to write
-  // a simple wrapper type class (I like to call it Par) that "forgets" the
-  // applicative effect (G, here) meaning it doesn't have to be specified.
+  // second (applicative) type constructor. For use-cases like this where we
+  // just want a very simple, parallel combination of two effects, it's
+  // possible to write a simple wrapper type class (I like to call it Par)
+  // that "forgets" the applicative effect (G, here) meaning it doesn't have
+  // to be specified.
   def combine[F[_]: Sync, G[_]](client: Client[F])(implicit ev: Parallel[F, G]): F[Unit] =
     for {
       userAndPosts <- Parallel.parTuple2(user(client), posts(client))
@@ -50,6 +67,14 @@ object App extends StreamApp[IO] {
       _ <- Sync[F].delay(println(message))
     } yield ()
 
+  // I'm somewhat ignoring error handling here. Obviously, network
+  // communication could fail, or the returned JSON might not be parseable as
+  // expected. These errors will be communicated back here via failed IO
+  // values embedded in the streams.
+  //
+  // The benefit of using streams here, rather than having anything to do with
+  // streaming responses, is instead simply so that regardless of success or
+  // failure we shut down the client's connection pool cleanly.
   def stream(args: List[String], requestShutdown: IO[Unit]): Stream[IO, ExitCode] =
     for {
       client <- Http1Client.stream[IO]()
