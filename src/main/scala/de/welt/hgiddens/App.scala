@@ -12,8 +12,10 @@ import org.log4s.getLogger
 
 object App extends StreamApp[IO] {
   private[this] val log = getLogger
-  private val userResource = Uri.uri("https://jsonplaceholder.typicode.com/users/1")
-  private val postsResource = Uri.uri("https://jsonplaceholder.typicode.com/posts?userId=1")
+  private def userResource(userId: Int): Uri =
+    Uri.uri("https://jsonplaceholder.typicode.com/users") / userId.toString
+  private def postsResource(userId: Int): Uri =
+    Uri.uri("https://jsonplaceholder.typicode.com/posts").withQueryParam("userId", userId.toString)
 
   // Given the problem statement is to gather data from two endpoints
   // asynchronously, the pervasive references to cats.effect.Sync may be
@@ -28,18 +30,18 @@ object App extends StreamApp[IO] {
   // client.expect call in user doesn't block the corresponding call in posts,
   // despite happening on the same thread.
 
-  def user[F[_]: Sync](client: Client[F]): F[User] =
+  def user[F[_]: Sync](client: Client[F], userId: Int): F[User] =
     for {
       _ <- Sync[F].delay(log.info("Sending user request"))
-      user <- client.expect[User](userResource)
+      user <- client.expect[User](userResource(userId))
       _ <- Sync[F].delay(log.info("Retrieved user"))
     } yield user
 
 
-  def posts[F[_]: Sync](client: Client[F]): F[Posts] =
+  def posts[F[_]: Sync](client: Client[F], userId: Int): F[Posts] =
     for {
       _ <- Sync[F].delay(log.info("Sending posts request"))
-      posts <- client.expect[Posts](postsResource)
+      posts <- client.expect[Posts](postsResource(userId))
       _ <- Sync[F].delay(log.info("Retrieved posts"))
     } yield posts
 
@@ -59,10 +61,9 @@ object App extends StreamApp[IO] {
   // possible to write a simple wrapper type class (I like to call it Par)
   // that "forgets" the applicative effect (G, here) meaning it doesn't have
   // to be specified.
-  def showPostSummary[F[_]: Sync, G[_]](client: Client[F])(implicit ev: Parallel[F, G]): F[Unit] =
+  def showPostSummary[F[_]: Sync, G[_]](client: Client[F], userId: Int)(implicit ev: Parallel[F, G]): F[Unit] =
     for {
-      userAndPosts <- (user(client), posts(client)).parTupled
-//      userAndPosts <- Parallel.parTuple2(user(client), posts(client))
+      userAndPosts <- (user(client, userId), posts(client, userId)).parTupled
       // This can't be destructured in the previous binding because Scala
       // thinks the pattern match is refutable for some dumb reason. There's
       // actually a compiler plugin that alters the behaviour of for
@@ -84,6 +85,6 @@ object App extends StreamApp[IO] {
   def stream(args: List[String], requestShutdown: IO[Unit]): Stream[IO, ExitCode] =
     for {
       client <- Http1Client.stream[IO]()
-      _ <- Stream.eval(showPostSummary(client))
+      _ <- Stream.eval(showPostSummary(client, userId = 1))
     } yield ExitCode.Success
 }
